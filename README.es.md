@@ -1,3 +1,6 @@
+# Multilanguage README Pattern
+[![en](https://img.shields.io/badge/lang-en-red.svg)](https://github.com/agmaiztegui/scapyLeds/blob/main/README.md)
+
 # scapyLeds
 Network Noise Visual Indicator
 
