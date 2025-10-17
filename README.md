@@ -1,4 +1,3 @@
-# Multilanguage README Pattern
 [![en](https://img.shields.io/badge/lang-en-red.svg)](https://github.com/agmaiztegui/scapyLeds/blob/main/README.md)
 [![es](https://img.shields.io/badge/lang-es-yellow.svg)](https://github.com/agmaiztegui/scapyLeds/blob/main/README.es.md)
 
@@ -12,10 +11,34 @@ The ideal Lab setup includes the attacker's computer, a target computer, an L2 m
 
 
 ## Requirements
-- One raspberry pi: In this case, a raspberry pi 3B+
+- One raspberry pi: In this case, a raspberry pi 3B+ with Raspbian
 - One pcb Board with 20 LEDs: This requires 4 GPIO PINs to select the Rows and 5 GPIO PINs to select the Columns.
+
+
+
 
 ### LED PCB Board.
 WORK IN PROGRESS.
 
 
+
+
+### scapyLeds.py
+The program can be ran in a headless fashion using systemd (see below). Some empty files must exist for the program to run. These files are specified using variables:
+
+## Debug and systemd related variables.
+- archivoLog: log file (for debugging).
+- logFlag: name of the file that must be present to enable logging.
+- archivoOperacion: name of the file that must be present for the program to run.
+- archivoControl: Used to prevent the program from attempting to run more than once at a time. Ideally, this path should lead to a volatile storage like a ramdrive so that the file is erased on reboot.
+## Settings.
+- TIEMPO_CAPTURA: Capture window duration, in seconds. Default 0.05 seconds.
+- stripON: How much time in seconds a given LED strip (row) will remain ON before proceeding to the next.
+- refreshes: Minimum number of passes through all the LED strips.
+- row0~3 and col0~4: these are the GPIO (BCM) numbers. They should be in order.
+
+
+
+
+
+### Running scapyLeds.py headless with systemd.

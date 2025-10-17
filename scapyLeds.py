@@ -19,7 +19,7 @@ logFlag = "/home/pi/scapyLeds/logging.enabled"
 # systemd auxiliares
 archivoOperacion = "/home/pi/scapyLeds/scapyLeds.running"
 archivoControl = "/ramdisk/LOCK_scapyLeds.txt"
-
+systemEnabled = 1
 
 # TIEMPO_CAPTURA = 0.05
 TIEMPO_CAPTURA = 0.05
@@ -313,6 +313,7 @@ def dibujarMP(laQueue):
             valRow0, valRow1, valRow2, valRow3 = (0,0,0,0)
         if(valRow0 == -9):
             flagRUN = 0
+            # loguear("dibujarMP: recibí kill signal.")
         
         # 1º apago TODO.
         for x in range(refreshes):
@@ -390,6 +391,21 @@ def dibujarMP(laQueue):
 # --------------------------------------------------------------
 
 def setearPINS(cval0, cval1, cval2, cval3, rval0, rval1, rval2, rval3, rval4):
+    # intento para eliminar el fantasmeo.
+    GPIO.output(row0, 1) 
+    GPIO.output(row1, 1)
+    GPIO.output(row2, 1)
+    GPIO.output(row3, 1)
+    #
+    GPIO.output(col0, 0)
+    GPIO.output(col1, 0)
+    GPIO.output(col2, 0)
+    GPIO.output(col3, 0)
+    GPIO.output(col4, 0)    
+    
+    time.sleep(stripON)
+    # Ahora sí, dibujo lo que me pidieron.
+    
     GPIO.output(row0, cval0) 
     GPIO.output(row1, cval1)
     GPIO.output(row2, cval2)
@@ -400,6 +416,23 @@ def setearPINS(cval0, cval1, cval2, cval3, rval0, rval1, rval2, rval3, rval4):
     GPIO.output(col2, rval2)
     GPIO.output(col3, rval3)
     GPIO.output(col4, rval4)
+
+
+
+# --------------------------------------------------------------
+
+def setearPINS_backup(cval0, cval1, cval2, cval3, rval0, rval1, rval2, rval3, rval4):
+    GPIO.output(row0, cval0) 
+    GPIO.output(row1, cval1)
+    GPIO.output(row2, cval2)
+    GPIO.output(row3, cval3)
+    #
+    GPIO.output(col0, rval0)
+    GPIO.output(col1, rval1)
+    GPIO.output(col2, rval2)
+    GPIO.output(col3, rval3)
+    GPIO.output(col4, rval4)
+
 
 
 
@@ -516,11 +549,15 @@ def analyze_packets(packets):
     }
 
 
+
+
 # --------------------------------------------------------------
 
 def capture_loop(interface='eth0'):
     global GLOBAL_LISTA_CAPTURAS
     global queueDibujo
+    global systemEnabled
+    
     row0_prev = 0
     row1_prev = 0
     row2_prev = 0
@@ -529,8 +566,10 @@ def capture_loop(interface='eth0'):
     row1 = None
     row2 = None
     row3 = None
+    
+    contador = 0
 
-    while True:
+    while (systemEnabled == 1):
         start = time.time()
         packets = sniff(iface=interface, timeout=TIEMPO_CAPTURA)  # 100ms window
         GLOBAL_LISTA_CAPTURAS.append(packets)
@@ -582,7 +621,18 @@ def capture_loop(interface='eth0'):
         msTranscurridos = (ahoraTest - start)*1000
         debieraSer = TIEMPO_CAPTURA * 1000
         relativo = int(msTranscurridos * 100 / debieraSer)
-
+        # checkeo condicion de salida
+        contador = contador + 1
+        if(contador > 55):
+            # debiera ser 5 segundos con 55 loops, aprox.
+            contador = 0
+            if os.path.exists(archivoOperacion):
+                pass
+            else:
+                systemEnabled = 0
+                queueDibujo.put((-9,0,0,0)) # mando un software kill signal al otro proceso.
+                loguear("mande kill signal a dibujarMP.")
+    loguear("captureLoop finalizó.")
 
 
 
@@ -591,16 +641,32 @@ def capture_loop(interface='eth0'):
 
 
 def main():
+    global systemEnabled
     p1 = multiprocessing.Process(target=dibujarMP, args=(queueDibujo,))
     p1.start()
+    loguear("inicio!")
+    
+    
     try:
-        while(True):
+        while(systemEnabled == 1):
             capture_loop()
     except KeyboardInterrupt:
         queueDibujo.put((-9,0,0,0))
         time.sleep(2)
+        loguear("Keyboard interrupt!")
         sys.exit()
+    loguear("MAIN finalizó.")
 
 
 main()
-GPIO.cleanup()
+try:
+    GPIO.cleanup()
+except Exception as e:
+    print(e)
+    # loguear(str(e))
+time.sleep(2)
+os.remove(archivoControl)
+print("END.")
+loguear("END.")
+
+sys.exit(0)
