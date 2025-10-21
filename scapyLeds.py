@@ -11,7 +11,9 @@ import queue
 import os
 # systemd version
 import sys
-
+# cosas http
+import re
+from collections import Counter
 
 # Logging
 archivoLog = "/home/pi/scapyLeds/syslog.txt"
@@ -44,6 +46,22 @@ col3 = 23 #
 col4 = 18 #
 
 
+# variables HTTP method
+RE_HTTP_METHOD = re.compile(rb'^(GET|POST|HEAD|OPTIONS|PUT|DELETE)\s+', re.I)
+WEIGHTS = {
+    b"GET": 1.0,
+    b"HEAD": 0.8,
+    b"OPTIONS": 0.5,
+    b"POST": 1.5,    # POSTs often indicate login attempts / brute force
+    b"PUT": 1.5,
+    b"DELETE": 3.0,
+}
+
+
+
+
+
+
 try:
     GPIO.cleanup()
     GPIO.setmode(GPIO.BCM)
@@ -67,15 +85,17 @@ GPIO.setup(col4, GPIO.OUT)
 # AVERAGING & SCALING
 muestras = 150
 cantCapturas = 6
-GLOBAL_LISTA_PSIZE = deque(maxlen=muestras)
-GLOBAL_LISTA_HOSTS = deque(maxlen=muestras)
+GLOBAL_LISTA_PSIZE = deque(maxlen=5)
+GLOBAL_LISTA_HTTPMETHODS = deque(maxlen=muestras*10)
+GLOBAL_LISTA_HTTPMETHODS_SMALL = deque(maxlen=15)
 GLOBAL_LISTA_PORTS = deque(maxlen=muestras)
 GLOBAL_LISTA_PPS = deque(maxlen=muestras)
 GLOBAL_LISTA_CAPTURAS = deque(maxlen=cantCapturas) #aca voy a guardar las ultimas 10 capturas.
 GLOBAL_AVG_PSIZE = 0
-GLOBAL_AVG_HOSTS = 0
+GLOBAL_AVG_HTTP = 0
 GLOBAL_AVG_PORTS = 0
 GLOBAL_AVG_PPS = 0
+GLOBAL_AVG_HTTP_SMALL = 0
 queueDibujo = multiprocessing.Queue()
 
 
@@ -170,7 +190,7 @@ if (luzVerde == 0):
 
 # --------------------------------------------------------------
 
-def scaleMasterA(PSIZE, HOSTS, PORTS, PPS):
+def scaleMasterA(PSIZE, WEIGHT_RATIO, PORTS, PPS):
     # tengo min, max, gajos y leds para el promedio.
     display = []
     
@@ -188,19 +208,26 @@ def scaleMasterA(PSIZE, HOSTS, PORTS, PPS):
     if(PSIZE > 1550 ):
         cantLeds = 5
     display.append(cantLeds)
-    # HOSTS - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    # quiero que GLOBAL_AVG_HOSTS sea 1 led prendido. Luego prendo un led adicional...
-    #  ... por cada orden de magnitud que supere al promedio
+    # HTTP Methods - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    LOCAL_WEIGHT_RATIO_AVR = GLOBAL_AVG_HTTP / (TIEMPO_CAPTURA*cantCapturas)
+    LOCAL_WEIGHT_RATIO_AVR_SMALL = GLOBAL_AVG_HTTP_SMALL / (TIEMPO_CAPTURA*cantCapturas)
+    if(LOCAL_WEIGHT_RATIO_AVR != 0):
+        frase = "AVR_SMALL={2:.1f}  WRR={0:.1f}  LWR={1:1f}".format(WEIGHT_RATIO / LOCAL_WEIGHT_RATIO_AVR, LOCAL_WEIGHT_RATIO_AVR, LOCAL_WEIGHT_RATIO_AVR_SMALL)
+        loguear(frase)
     cantLeds = 0
-    if((HOSTS > 0) and (HOSTS < GLOBAL_AVG_HOSTS)):
+    weight_1led = LOCAL_WEIGHT_RATIO_AVR
+    weight_2leds = LOCAL_WEIGHT_RATIO_AVR * 1.5
+    weight_3leds = LOCAL_WEIGHT_RATIO_AVR * 1.9
+    weight_4leds = LOCAL_WEIGHT_RATIO_AVR * 2.5
+    if((LOCAL_WEIGHT_RATIO_AVR_SMALL > 0) and (LOCAL_WEIGHT_RATIO_AVR_SMALL < weight_1led)):
         cantLeds = 1
-    if((HOSTS > GLOBAL_AVG_HOSTS) and (HOSTS < GLOBAL_AVG_HOSTS*2)):
+    if((LOCAL_WEIGHT_RATIO_AVR_SMALL > weight_1led) and (LOCAL_WEIGHT_RATIO_AVR_SMALL < weight_2leds)):
         cantLeds = 2
-    if((HOSTS > GLOBAL_AVG_HOSTS*2) and (HOSTS < GLOBAL_AVG_HOSTS*3)):
+    if((LOCAL_WEIGHT_RATIO_AVR_SMALL > weight_2leds) and (LOCAL_WEIGHT_RATIO_AVR_SMALL < weight_3leds)):
         cantLeds = 3
-    if((HOSTS > GLOBAL_AVG_HOSTS*3) and (HOSTS < GLOBAL_AVG_HOSTS*4) and (HOSTS > 5)):
+    if((LOCAL_WEIGHT_RATIO_AVR_SMALL > weight_3leds) and (LOCAL_WEIGHT_RATIO_AVR_SMALL < weight_4leds)):
         cantLeds = 4
-    if((HOSTS > GLOBAL_AVG_HOSTS*4) and (HOSTS > 15)):
+    if(LOCAL_WEIGHT_RATIO_AVR_SMALL > weight_4leds):
         cantLeds = 5
     display.append(cantLeds)
     # PORTS - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -241,48 +268,36 @@ def scaleMasterA(PSIZE, HOSTS, PORTS, PPS):
     
 # --------------------------------------------------------------
 
-def promedios(pSize, nHosts, nPorts, pps):
+def promedios(pSize, weights_http_methods, nPorts, pps):
     global GLOBAL_LISTA_PSIZE
-    global GLOBAL_LISTA_HOSTS
+    global GLOBAL_LISTA_HTTPMETHODS
+    global GLOBAL_LISTA_HTTPMETHODS_SMALL
     global GLOBAL_LISTA_PORTS
     global GLOBAL_LISTA_PPS
     global GLOBAL_AVG_PSIZE
-    global GLOBAL_AVG_HOSTS
+    global GLOBAL_AVG_HTTP
     global GLOBAL_AVG_PORTS
     global GLOBAL_AVG_PPS
+    global GLOBAL_AVG_HTTP_SMALL
     
     GLOBAL_LISTA_PSIZE.append(pSize)
-    GLOBAL_LISTA_HOSTS.append(nHosts)
+    GLOBAL_LISTA_HTTPMETHODS_SMALL.append(weights_http_methods)
+    if(weights_http_methods > 0.05):
+        GLOBAL_LISTA_HTTPMETHODS.append(weights_http_methods)
     GLOBAL_LISTA_PORTS.append(nPorts)
     GLOBAL_LISTA_PPS.append(pps)
+    
+    if(len(GLOBAL_LISTA_HTTPMETHODS)>0):
+        GLOBAL_AVG_HTTP = sum(GLOBAL_LISTA_HTTPMETHODS)/len(GLOBAL_LISTA_HTTPMETHODS)
+    else:
+        GLOBAL_AVGGLOBAL_LISTA_HTTPMETHODS_SMALL_HTTP = 0.0
+    
+    GLOBAL_AVG_HTTP_SMALL = sum(GLOBAL_LISTA_HTTPMETHODS_SMALL)/len(GLOBAL_LISTA_HTTPMETHODS_SMALL)
     GLOBAL_AVG_PSIZE = sum(GLOBAL_LISTA_PSIZE)/len(GLOBAL_LISTA_PSIZE)
-    GLOBAL_AVG_HOSTS = sum(GLOBAL_LISTA_HOSTS)/len(GLOBAL_LISTA_HOSTS)
     GLOBAL_AVG_PORTS = sum(GLOBAL_LISTA_PORTS)/len(GLOBAL_LISTA_PORTS)
     GLOBAL_AVG_PPS = sum(GLOBAL_LISTA_PPS)/len(GLOBAL_LISTA_PPS)
 
 # --------------------------------------------------------------
-
-def dibujarDEBUG(valRow0, valRow1, valRow2, valRow3):
-    clear = lambda: os.system('clear')
-    clear()
-    linea0 = ""
-    linea1 = ""
-    linea2 = ""
-    linea3 = ""
-    for i in range(valRow0):
-        linea0 = linea0 + "@   "
-    for i in range(valRow1):
-        linea1 = linea1 + "@   "
-    for i in range(valRow2):
-        linea2 = linea2 + "@   "
-    for i in range(valRow3):
-        linea3 = linea3 + "@   "
-    print(linea0)
-    print(linea1)
-    print(linea2)
-    print(linea3)
-
-
 
 
 # --------------------------------------------------------------
@@ -421,20 +436,6 @@ def setearPINS(cval0, cval1, cval2, cval3, rval0, rval1, rval2, rval3, rval4):
 
 # --------------------------------------------------------------
 
-def setearPINS_backup(cval0, cval1, cval2, cval3, rval0, rval1, rval2, rval3, rval4):
-    GPIO.output(row0, cval0) 
-    GPIO.output(row1, cval1)
-    GPIO.output(row2, cval2)
-    GPIO.output(row3, cval3)
-    #
-    GPIO.output(col0, rval0)
-    GPIO.output(col1, rval1)
-    GPIO.output(col2, rval2)
-    GPIO.output(col3, rval3)
-    GPIO.output(col4, rval4)
-
-
-
 
 # --------------------------------------------------------------
 
@@ -450,6 +451,9 @@ def analyze_list():
     for packets in GLOBAL_LISTA_CAPTURAS:
         for pkt in packets:
             listaManojo.append(pkt)
+    # --- HTTP method counting ---
+    method_counter = Counter()
+    weighted_sum = 0.0
     for pkt in listaManojo:
         total_size += len(pkt)
         if IP in pkt:
@@ -461,95 +465,44 @@ def analyze_list():
         if UDP in pkt:
             udp_ports.add(pkt[UDP].sport)
             udp_ports.add(pkt[UDP].dport)
+        
+
+        # métodos http
+        if pkt.haslayer('Raw'):
+            try:
+                payload = bytes(pkt['Raw'].load)
+            except Exception as e:
+                payload = b''
+            if not payload:
+                continue
+            # loguear(str(repr(payload[:64])))
+            m = RE_HTTP_METHOD.search(payload[:64])
+            if m:
+                # loguear("encontre metodos http.")
+                method = m.group(1).upper()
+                method_counter[method] += 1
+                weighted_sum += WEIGHTS.get(method, 1.0)
+            
+            
     count = len(listaManojo)
     avg_size = total_size / count if count > 0 else 0
-    # promedios(pSize, nHosts, nPorts, pps)
-    promedios(avg_size, len(ip_set), len(tcp_ports)+len(udp_ports), count/TIEMPO_CAPTURA*cantCapturas)
+    # promedios(pSize, weights_http_methods, nPorts, pps)
+    promedios(avg_size, weighted_sum, len(tcp_ports)+len(udp_ports), count/TIEMPO_CAPTURA*cantCapturas)
     return {
         "packet_count": count,
         "avg_packet_size": avg_size,
         "unique_hosts": len(ip_set),
         "tcp_ports": len(tcp_ports),
         "udp_ports": len(udp_ports),
+        "weighted_sum": weighted_sum,
     }
 
 
 # --------------------------------------------------------------
 
-
-def analyze_list_bkp():
-    global GLOBAL_LISTA_CAPTURAS
-    total_size = 0
-    ip_set = set()
-    tcp_ports = set()
-    udp_ports = set()
-    count = 0
-
-    listaManojo = []
-    for packets in GLOBAL_LISTA_CAPTURAS:
-        for pkt in packets:
-            listaManojo.append(pkt)
-    for packets in GLOBAL_LISTA_CAPTURAS:
-        for pkt in packets:
-            total_size += len(pkt)
-            if IP in pkt:
-                ip_set.add(pkt[IP].src)
-                ip_set.add(pkt[IP].dst)
-            if TCP in pkt:
-                tcp_ports.add(pkt[TCP].sport)
-                tcp_ports.add(pkt[TCP].dport)
-            if UDP in pkt:
-                udp_ports.add(pkt[UDP].sport)
-                udp_ports.add(pkt[UDP].dport)
-        count = count + len(packets)
-        avg_size = total_size / count if count > 0 else 0
-    # promedios(pSize, nHosts, nPorts, pps)
-    promedios(avg_size, len(ip_set), len(tcp_ports)+len(udp_ports), count/TIEMPO_CAPTURA*cantCapturas)
-    return {
-        "packet_count": count,
-        "avg_packet_size": avg_size,
-        "unique_hosts": len(ip_set),
-        "tcp_ports": len(tcp_ports),
-        "udp_ports": len(udp_ports),
-    }
-
-
-
-
 # --------------------------------------------------------------
 
-
-
-def analyze_packets(packets):
-    total_size = 0
-    ip_set = set()
-    tcp_ports = set()
-    udp_ports = set()
-
-    for pkt in packets:
-        total_size += len(pkt)
-        if IP in pkt:
-            ip_set.add(pkt[IP].src)
-            ip_set.add(pkt[IP].dst)
-        if TCP in pkt:
-            tcp_ports.add(pkt[TCP].sport)
-            tcp_ports.add(pkt[TCP].dport)
-        if UDP in pkt:
-            udp_ports.add(pkt[UDP].sport)
-            udp_ports.add(pkt[UDP].dport)
-    count = len(packets)
-    avg_size = total_size / count if count > 0 else 0
-    promedios(avg_size, len(ip_set), len(tcp_ports)+len(udp_ports), count/TIEMPO_CAPTURA)
-    return {
-        "packet_count": count,
-        "avg_packet_size": avg_size,
-        "unique_hosts": len(ip_set),
-        "tcp_ports": len(tcp_ports),
-        "udp_ports": len(udp_ports),
-    }
-
-
-
+# --------------------------------------------------------------
 
 # --------------------------------------------------------------
 
@@ -573,10 +526,10 @@ def capture_loop(interface='eth0'):
         start = time.time()
         packets = sniff(iface=interface, timeout=TIEMPO_CAPTURA)  # 100ms window
         GLOBAL_LISTA_CAPTURAS.append(packets)
-        # stats = analyze_packets(packets)
         stats = analyze_list()
         elapsed = time.time() - start
         pps = stats["packet_count"] / elapsed if elapsed > 0 else 0
+        weight_ratio = stats["weighted_sum"] / elapsed if elapsed > 0 else 0
         if((row0 != None) and (row1 != None) and (row2 != None) and (row3 != None)):
             row0_prev = row0
             row1_prev = row1
@@ -587,7 +540,7 @@ def capture_loop(interface='eth0'):
             row1_prev = 0
             row2_prev = 0
             row3_prev = 0
-        row0, row1, row2, row3 = scaleMasterA(stats["avg_packet_size"], stats["unique_hosts"], stats["tcp_ports"]+stats["udp_ports"], round(pps, 2))
+        row0, row1, row2, row3 = scaleMasterA(stats["avg_packet_size"], weight_ratio, stats["tcp_ports"]+stats["udp_ports"], round(pps, 2))
         # Voy a agregar a la Queue tantos cambios como hagan falta para incrementar leds DE A UNO!
         dif_row0 = row0 - row0_prev
         dif_row1 = row1 - row1_prev
@@ -616,7 +569,6 @@ def capture_loop(interface='eth0'):
             #
             # Agrego el dibujo intermedio con los row0_prev
             queueDibujo.put((row0_prev,row1_prev,row2_prev,row3_prev))
-            # dibujarDEBUG(row0_prev,row1_prev,row2_prev,row3_prev)
         ahoraTest = time.time()
         msTranscurridos = (ahoraTest - start)*1000
         debieraSer = TIEMPO_CAPTURA * 1000
